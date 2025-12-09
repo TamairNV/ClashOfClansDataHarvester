@@ -4,7 +4,8 @@ import urllib.parse
 import dotenv
 import requests
 from DBManager import DBManager
-
+import dotenv
+import os
 
 class FetchSession:
 
@@ -17,7 +18,13 @@ class FetchSession:
             "Authorization": f"Bearer {self.TOKEN}"
         }
 
-        self.db = DBManager("192.168.1.18","Home_User", "Tamer@2006","clash_db")
+
+        host = environ.get("DB_HOST")
+        password = environ.get("DB_PASSWORD")
+        user = environ.get("DB_USER")
+        DB = environ.get("DB_NAME")
+
+        self.db = DBManager(host,user, password,DB)
 
 
     def getData(self,endpoint):
@@ -68,6 +75,8 @@ class clan:
         self.clanTag = self.data['tag']
         self.level = self.data['clanLevel']
         self.saveClanData()
+        self.players = []
+        self.saveClanMemberData()
 
     def saveClanData(self):
         sql = """
@@ -81,17 +90,36 @@ class clan:
             self.session.db.execute(sql, (self.clanTag,self.name,self.level))
 
 
+    def saveClanMemberData(self):
+        for m in self.data['memberList']:
+            self.players.append(player(m['tag'],self.session))
 
 
+    def savePlayersSnapshot(self): # run every hour
+        for p in self.players:
+            p.snapshot = p.getNewSnapshot()
 
-class clanWar:
+    def savePlayersActivity(self): # run every 10 mins
+        for p in self.players:
+            p.activityCheck()
+
+
+class clanWar: # run every 30 mins
 
     def __init__(self,session,tag):
         self.session = session
         self.data = session.getData(f"clans/{tag}/currentwar")
+
+        # 1. Check State First
+        self.state = self.data.get('state')
+
+        if self.state == 'notInWar':
+            print("Clan is not in war.")
+            return
+
+
         self.clanTag1 = tag
         self.clanTag2 = self.data['opponent']['tag']
-        self.state = self.data['state']
         self.teamSize = self.data['teamSize']
         self.startTime = self.data['startTime']
         self.endTime = self.data['endTime']
@@ -132,7 +160,7 @@ class clanWar:
 
 
 
-class warResults:
+class warResults: # run every 5 minutes
 
     @staticmethod
     def checkWarEnded(session):
@@ -216,7 +244,7 @@ class warPlayer:
         session.db.execute(sql,(war.id, self.playerTag,self.mapPosition,self.townHallLevel,self.name,self.clanTag,))
 
 
-class attack:
+class attack: # run every 10 minutes
 
     @staticmethod
     def saveAttacks(session):
