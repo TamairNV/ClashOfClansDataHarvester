@@ -128,3 +128,10 @@ CREATE TABLE IF NOT EXISTS ActivitySnapshot (
     PRIMARY KEY (playerTag, time),
     FOREIGN KEY (playerTag) REFERENCES Player(playerTag)
 ) ENGINE=InnoDB;
+
+ALTER TABLE WarPlayer
+ADD COLUMN clanTag VARCHAR(15);
+
+ALTER TABLE WarPlayer
+ADD CONSTRAINT fk_warplayer_clan
+FOREIGN KEY (clanTag) REFERENCES Clan(tag);

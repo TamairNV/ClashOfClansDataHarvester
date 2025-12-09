@@ -1,7 +1,6 @@
-import time
+from datetime import datetime
 from os import environ
 import urllib.parse
-
 import dotenv
 import requests
 from DBManager import DBManager
@@ -102,20 +101,18 @@ class clanWar:
         self.id = None;
 
         self.saveWar()
-        oppMembers = []
         for m in self.data['opponent']['members']:
-            player = warPlayer(m)
+            player = warPlayer(m,self.clanTag2)
             player.savePlayer(self.session,self)
-            oppMembers.append(warPlayer(m))
-        friMembers = []
+
         for m in self.data['clan']['members']:
-            player = warPlayer(m)
+            player = warPlayer(m,self.clanTag1)
             player.savePlayer(self.session, self)
-            friMembers.append(warPlayer(m))
+
 
     def saveWar(self):
         sql = """
-        SELECT warID FROM ClanWar WHERE (clanTag1 = ? AND clanTag2 = ?) AND state IN ('preparation', 'inWar');; 
+        SELECT warID FROM ClanWar WHERE (clanTag1 = ? AND clanTag2 = ?) AND state IN ('preparation', 'inWar');
         """
         wars = self.session.db.execute(sql,(self.clanTag1,self.clanTag2,))
         if not wars:
@@ -130,6 +127,8 @@ class clanWar:
 
         else:
             self.id = wars[0][0]
+            update_sql = "UPDATE ClanWar SET state = ? WHERE warID = ?"
+            self.session.db.execute(update_sql, (self.state, self.id))
 
 
 
@@ -138,72 +137,83 @@ class warResults:
     @staticmethod
     def checkWarEnded(session):
         sql = """
-        SELECT warID,clanTag1,clanTag2 FROM ClanWar WHERE state == "warEnded";
+        SELECT warID,clanTag1,clanTag2 FROM ClanWar WHERE state = "warEnded";
         """
         wars = session.db.execute(sql)
 
         if wars:
             for war in wars:
-                sql = """
-                SELECT destruction,stars,attackerTag FROM Attack,WarPlayer WHERE warID = ?;
-                """
-                attacks = session.db.execute(sql,(war[0],))
-                stars = [0,0]
-                destruction = [0,0]
-                numOfAttacks = [0,0]
+                check_sql = "SELECT 1 FROM WarResults WHERE warID = ?"
+                exists = session.db.execute(check_sql, (war[0],))
 
-                for attack in attacks:
-                    if attack[2] == war[1]:
-                        stars[0] += attack[1]
-                        destruction[0] += attack[0]
-                        numOfAttacks[0] +=1
+                if not exists:
+                    sql = """
+                    SELECT a.stars, a.destruction, p.clanTag 
+                    FROM Attack a
+                    JOIN WarPlayer p ON a.attackerTag = p.playerTag AND a.warID = p.warID
+                    WHERE a.warID = ?
+                    """
+                    attacks = session.db.execute(sql,(war[0],))
+                    stars = [0,0]
+                    destruction = [0,0]
+                    numOfAttacks = [0,0]
+
+                    for attack in attacks:
+                        if attack[2] == war[1]:
+                            stars[0] += attack[0]
+                            destruction[0] += attack[1]
+                            numOfAttacks[0] +=1
+                        else:
+                            stars[1] += attack[0]
+                            destruction[1] += attack[1]
+                            numOfAttacks[1] +=1
+
+                    if numOfAttacks[0] > 0:
+                        destruction[0] /= numOfAttacks[0]
+                    if numOfAttacks[1] > 0:
+                        destruction[1] /= numOfAttacks[1]
+
+                    sql = """
+                            INSERT INTO WarResults (warID, clanTag, totalDestruction, totalStars, result)
+                            VALUES (?, ?, ?, ?, ?)
+                            """
+                    states = [None,None]
+                    if stars[0] > stars[1]:
+                        states[0] = "WIN"
+                        states[1] = "LOSS"
+
+                    elif stars[0] < stars[1]:
+                        states[0] = "LOSS"
+                        states[1] = "WIN"
+
+                    elif destruction[0] > destruction[1]:
+                        states[0] = "WIN"
+                        states[1] = "LOSS"
+
+                    elif destruction[0] < destruction[1]:
+                        states[0] = "LOSS"
+                        states[1] = "WIN"
                     else:
-                        stars[1] += attack[1]
-                        destruction[1] += attack[0]
-                        numOfAttacks[1] +=1
-
-                destruction[0] /= numOfAttacks[0]
-                destruction[1] /= numOfAttacks[1]
-
-                sql = """
-                INSERT INTO WarResults (warID,clanTag,totalDestruction,totalStars,result)
-                """
-                states = [None,None]
-                if stars[0] > stars[1]:
-                    states[0] = "WIN"
-                    states[1] = "LOSS"
-
-                elif stars[0] < stars[1]:
-                    states[0] = "LOSS"
-                    states[1] = "WIN"
-
-                elif destruction[0] > destruction[1]:
-                    states[0] = "WIN"
-                    states[1] = "LOSS"
-
-                elif destruction[0] < destruction[1]:
-                    states[0] = "LOSS"
-                    states[1] = "WIN"
-                else:
-                    states[0] = "DRAW"
-                    states[1] = "DRAW"
+                        states[0] = "DRAW"
+                        states[1] = "DRAW"
 
 
-                session.db.execute(sql,(war[0],war[1],destruction[0],stars[0],states[0]))
-                session.db.execute(sql, (war[0], war[2], destruction[1], stars[1], states[1]))
+                    session.db.execute(sql,(war[0],war[1],destruction[0],stars[0],states[0]))
+                    session.db.execute(sql, (war[0], war[2], destruction[1], stars[1], states[1]))
 
 class warPlayer:
-    def __init__(self,data):
+    def __init__(self,data,clanTag):
         self.playerTag = data['tag']
         self.mapPosition = data['mapPosition']
         self.townHallLevel = data['townhallLevel']
         self.name = data['name']
+        self.clanTag = clanTag
 
     def savePlayer(self,session,war):
         sql = """
-        INSERT INTO WarPlayer (warID,playerTag,mapPosition,townHallLevel,name) VALUES (?,?,?,?)
+        INSERT INTO WarPlayer (warID,playerTag,mapPosition,townHallLevel,name,clanTag) VALUES (?,?,?,?,?,?)
         """
-        session.db.execute(sql,(war.id, self.playerTag,self.mapPosition,self.townHallLevel,self.name,))
+        session.db.execute(sql,(war.id, self.playerTag,self.mapPosition,self.townHallLevel,self.name,self.clanTag,))
 
 
 class attack:
@@ -211,7 +221,7 @@ class attack:
     @staticmethod
     def saveAttacks(session):
         sql = """
-        SELECT warID,clanTag1,clanTag2 FROM ClanWar WHERE state == "inWar" OR state == "warEnded";
+        SELECT warID,clanTag1,clanTag2 FROM ClanWar WHERE state = "inWar" OR state = "warEnded";
         """
         wars = session.db.execute(sql)
 
@@ -220,32 +230,35 @@ class attack:
                 data = session.getData(f"clans/{war[1]}/currentwar")
 
                 for m in data['opponent']['members']:
-                    for attack in m['attacks']:
-                        sql = """
-                        INSERT INTO warAttacks (warID,attackerTag,defenderTag,stars,destruction,startTime,duration)
-                        VALUES (?,?,?,?,?,?,?)
-                        """
-                        session.db.execute(sql,(war[0],attack['attackerTag'],attack['defenderTag'],attack['stars'],attack['destructionPercentage'],attack['duration']))
+                    for attack in m.get('attacks', []):
 
+                        check_sql = "SELECT 1 FROM Attack WHERE warID=? AND attackerTag=? AND defenderTag=?"
+                        exists = session.db.execute(check_sql, (war[0], attack['attackerTag'], attack['defenderTag']))
+
+                        if not exists:
+
+                            sql = """
+                                INSERT INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """
+
+                            session.db.execute(sql, (war[0],attack['attackerTag'],attack['defenderTag'],attack['stars'],attack['destructionPercentage'],datetime.now(),attack['duration']
+                            ))
                 for m in data['clan']['members']:
-                    for attack in m['attacks']:
-                        sql = """
-                        INSERT INTO warAttacks (warID,attackerTag,defenderTag,stars,destruction,startTime,duration)
-                        VALUES (?,?,?,?,?,?,?)
-                        """
-                        session.db.execute(sql,(war[0],attack['attackerTag'],attack['defenderTag'],attack['stars'],attack['destructionPercentage'],attack['duration']))
+                    for attack in m.get('attacks', []):
+                        check_sql = "SELECT 1 FROM Attack WHERE warID=? AND attackerTag=? AND defenderTag=?"
+                        exists = session.db.execute(check_sql, (war[0], attack['attackerTag'], attack['defenderTag']))
 
+                        if not exists:
 
+                            sql = """
+                            INSERT INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """
 
+                            session.db.execute(sql, (war[0],attack['attackerTag'],attack['defenderTag'],attack['stars'],attack['destructionPercentage'],datetime.now(),attack['duration']
+                            ))
 
-
-    def __init__(self):
-        self.attackerTag
-        self.defenderTag
-        self.stars
-        self.destruction
-        self.startTime
-        self.duration
 
 
 
@@ -270,22 +283,25 @@ class player:
         self.data = self.session.getData(f"players/{self.playerTag}")
 
         sql = """
-        SELECT builderBaseTrophies, donations, donationsRecieved FROM PlayerSnapshot WHERE playerTag = ? DESC LIMIT 1;
+        SELECT builderBaseTrophies, donations, donationsRecieved FROM PlayerSnapshot WHERE playerTag = ? ORDER BY time DESC LIMIT 1;
         """
-        data = self.session.db.execute(sql,(self.playerTag,))[0]
-        if data['builderBaseTrophies'] != self.data['builderBaseTrophies'] or data['donations'] < self.data['donations'] or data['donationsRecieved'] < self.data['donationsRecieved']:
-            sql = """
-            INSERT INTO ActivitySnapshot (playerTag,time) Values(?,?)
-            """
-            self.session.db.execute(sql,(self.playerTag,time.time(),))
+        result = self.session.db.execute(sql,(self.playerTag,))
+        if result:
+            data = result[0]
 
+            if (data[0] != self.data['builderBaseTrophies'] or
+                    data[1] < self.data['donations'] or
+                    data[2] < self.data['donationsReceived']):
+
+                sql = "INSERT INTO ActivitySnapshot (playerTag, time) VALUES (?, ?)"
+                self.session.db.execute(sql, (self.playerTag, datetime.now()))
 
     def savePlayer(self):
         #check is player is already saved
         sql = """
-        SELECT name FROM Player WHERE name = ?;
+        SELECT playerTag FROM Player WHERE playerTag = ?;
         """
-        names = self.session.db.execute(sql,(self.name,))
+        names = self.session.db.execute(sql,(self.playerTag,))
         if not names:
             sql = """
             INSERT INTO Player(playerTag,clanTag,name) Values(?,?,?)
@@ -303,13 +319,14 @@ class playerSnapshot:
         self.exLevel = player.data['expLevel']
         self.warStars = player.data['warStars']
         self.builderHallLevel = player.data['builderHallLevel']
-        self.role =player.data['coLeader']
+        self.builderBaseTrophies = player.data['builderBaseTrophies']
+        self.role =player.data['role']
         self.warPreference = player.data['warPreference']
         self.donations = player.data['donations']
         self.donationsReceived = player.data['donationsReceived']
         self.league = player.data['leagueTier']['name']
         self.clanCapitalContributions = player.data['clanCapitalContributions']
-        self.time = time.time()
+        self.time = datetime.now()
 
     def saveSnapshot(self,db):
         sql = """
@@ -319,7 +336,7 @@ class playerSnapshot:
 
         """
 
-        db.execute(sql,(self.playerTag,self.time,self.clanTag,self.townHallLevel,self.exLevel,self.warStars,self.builderHallLevel,self.builderHallLevel,self.role,self.warPreference,self.donations,self.donationsReceived,self.clanCapitalContributions,self.league))
+        db.execute(sql,(self.playerTag,self.time,self.clanTag,self.townHallLevel,self.exLevel,self.warStars,self.builderHallLevel,self.builderBaseTrophies,self.role,self.warPreference,self.donations,self.donationsReceived,self.clanCapitalContributions,self.league))
 
 
 
