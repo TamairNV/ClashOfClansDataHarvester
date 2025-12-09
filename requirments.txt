@@ -1,2 +1,6 @@
 dotenv
 coc
+mariadb
+requests
+python-dotenv
+coc.py
