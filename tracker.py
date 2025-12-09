@@ -2,8 +2,11 @@ from Fetcher import *
 import threading
 import time
 from datetime import datetime
+from Fetcher import FetchSession, clan, clanWar, warResults, attack
+from TokenManager import get_valid_token # Import the helper we made in step 1
+import os
 
-clan_tags = ["#2LRJ2888Y", "#8GGPQLPU", "#22RUUC2JC"]
+clan_tags = ["#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC","#29U9COGLC",'#2LGGP2G82','#2RG22YYLL']
 
 
 def log(message):
@@ -34,17 +37,34 @@ def run_periodically(minutes, func, job_name, *args, **kwargs):
 def main():
     log("System starting up...")
 
+    # 1. GET THE TOKEN DYNAMICALLY
+    log("Authenticating with Clash of Clans Developer Portal...")
     try:
-        session = FetchSession()
+        dotenv.load_dotenv()
+        email = os.environ.get("COC_EMAIL")
+        password = os.environ.get("COC_PASSWORD")
+
+        dynamic_token = get_valid_token(email, password)
+        log("Authentication successful! Token acquired.")
+    except Exception as e:
+        log(f"CRITICAL: Could not login to developer portal: {e}")
+        return
+
+    try:
+
+        session = FetchSession(token=dynamic_token)
+
         clans = []
+
 
         log(f"Initializing {len(clan_tags)} clans...")
         for c in clan_tags:
-            new_clan = clan(c, session)
-            clans.append(new_clan)
-            log(f"-> Loaded clan: {new_clan.name} ({new_clan.clanTag})")
-
-        # --- Define Jobs with Logging ---
+            try:
+                new_clan = clan(c, session)
+                clans.append(new_clan)
+                log(f"-> Loaded clan: {new_clan.name} ({new_clan.clanTag})")
+            except Exception as e:
+                log(f"!! Failed to load clan {c}: {e}")
 
         def saveActivity():
             log("Job Started: Activity Check")

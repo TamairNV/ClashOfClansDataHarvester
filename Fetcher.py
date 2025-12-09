@@ -1,53 +1,81 @@
+# Fetcher.py
 from datetime import datetime
 from os import environ
 import urllib.parse
 import dotenv
 import requests
 from DBManager import DBManager
-import dotenv
+from TokenManager import get_valid_token
 import os
+
 
 class FetchSession:
 
-    def __init__(self):
+
+    def __init__(self, token=None, email=None, password=None):
         self.URL = "https://api.clashofclans.com/v1/"
-        dotenv.load_dotenv()
-        self.TOKEN = environ.get("TOKEN")
+        self.email = email
+        self.password = password
+
+        # Load initial token
+        if token:
+            self.TOKEN = token
+        else:
+            dotenv.load_dotenv()
+            self.TOKEN = environ.get("TOKEN")
+
         self.headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {self.TOKEN}"
         }
 
-
         host = environ.get("DB_HOST")
-        password = environ.get("DB_PASSWORD")
+        password_db = environ.get("DB_PASSWORD")
         user = environ.get("DB_USER")
         DB = environ.get("DB_NAME")
 
-        self.db = DBManager(host,user, password,DB)
+        self.db = DBManager(host, user, password_db, DB)
 
 
-    def getData(self,endpoint):
+    def getData(self, endpoint, retry=True):
         data = None
         try:
-
             encoded_tag = urllib.parse.quote(endpoint)
             URL = f"https://api.clashofclans.com/v1/{encoded_tag}"
             response = requests.get(URL, headers=self.headers)
 
-            # 5. Check for successful response
+
+            if response.status_code == 403 and retry and self.email and self.password:
+                print(f"!! 403 Forbidden detected for {endpoint}. IP likely changed. Refreshing Token...")
+
+                try:
+
+                    new_token = get_valid_token(self.email, self.password)
+
+
+                    self.TOKEN = new_token
+                    self.headers["Authorization"] = f"Bearer {self.TOKEN}"
+                    print("Token refreshed successfully! Retrying request...")
+
+
+                    return self.getData(endpoint, retry=False)
+
+                except Exception as e:
+                    print(f"CRITICAL: Failed to refresh token: {e}")
+                    return None
+
+
             if response.status_code == 200:
-                data  = response.json()
-                print("Got Data")
+                data = response.json()
+
             else:
                 print(f"Error fetching data. Status code: {response.status_code}")
-                print(response.text)  # Shows the error message from the API
+
 
         except requests.exceptions.RequestException as e:
             print(f"An error occurred: {e}")
 
         return data
-
 
     def getPlayerData(self):
         pass
@@ -75,7 +103,7 @@ class clan:
         self.clanTag = self.data['tag']
         self.level = self.data['clanLevel']
         self.saveClanData()
-        self.players = []
+
         self.saveClanMemberData()
 
     def saveClanData(self):
@@ -91,13 +119,37 @@ class clan:
 
 
     def saveClanMemberData(self):
+        self.players = []
         for m in self.data['memberList']:
             self.players.append(player(m['tag'],self.session))
 
+    def savePlayersSnapshot(self):  # run every half hour
 
-    def savePlayersSnapshot(self): # run every hour
-        for p in self.players:
-            p.snapshot = p.getNewSnapshot()
+        fresh_data = self.session.getData(f"clans/{self.clanTag}")
+        if fresh_data:
+
+            current_member_tags = [m['tag'] for m in fresh_data.get('memberList', [])]
+
+            sql_check = "SELECT playerTag FROM Player WHERE clanTag = ?"
+            db_members = self.session.db.execute(sql_check, (self.clanTag,))
+
+            db_member_tags = [row[0] for row in db_members]
+
+            for db_tag in db_member_tags:
+                if db_tag not in current_member_tags:
+                    print(f"-> Player {db_tag} has LEFT/KICKED. Updating DB...")
+                    # Remove them from the clan in the DB so we don't track them anymore
+                    update_sql = "UPDATE Player SET clanTag = NULL WHERE playerTag = ?"
+                    self.session.db.execute(update_sql, (db_tag,))
+
+
+            self.players = []
+
+            for m in fresh_data.get('memberList', []):
+                p_obj = player(m['tag'], self.session)
+                self.players.append(p_obj)
+                p_obj.snapshot = p_obj.getNewSnapshot()
+
 
     def savePlayersActivity(self): # run every 10 mins
         for p in self.players:
@@ -120,6 +172,15 @@ class clanWar: # run every 30 mins
 
         self.clanTag1 = tag
         self.clanTag2 = self.data['opponent']['tag']
+
+        opp_name = self.data['opponent']['name']
+        opp_level = self.data['opponent']['clanLevel']
+        check_sql = "SELECT tag FROM Clan WHERE tag = ?"
+        if not self.session.db.execute(check_sql, (self.clanTag2,)):
+            insert_sql = "INSERT INTO Clan(tag, name, level) VALUES(?, ?, ?)"
+            self.session.db.execute(insert_sql, (self.clanTag2, opp_name, opp_level))
+
+
         self.teamSize = self.data['teamSize']
         self.startTime = self.data['startTime']
         self.endTime = self.data['endTime']
@@ -139,17 +200,27 @@ class clanWar: # run every 30 mins
 
 
     def saveWar(self):
+        def fix_time(t):
+            if not t: return None
+            try:
+                # Parse the "YYYYMMDDTHHMMSS.000Z" format
+                dt = datetime.strptime(t, "%Y%m%dT%H%M%S.%fZ")
+                return dt
+            except ValueError:
+                return None
+
         sql = """
         SELECT warID FROM ClanWar WHERE (clanTag1 = ? AND clanTag2 = ?) AND state IN ('preparation', 'inWar');
         """
+
         wars = self.session.db.execute(sql,(self.clanTag1,self.clanTag2,))
         if not wars:
             sql = """
             INSERT INTO ClanWar(clanTag1,clanTag2,state,teamSize,startTime,endTime,warType,leagueGroupId,league) Values(?,?,?,?,?,?,?,?,?)
             """
 
-            self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.state, self.teamSize, self.teamSize,
-                                          self.endTime, self.warType, self.leagueGroupID, self.league))
+            self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.state, self.teamSize, fix_time(self.startTime),
+                                          fix_time(self.endTime), self.warType, self.leagueGroupID, self.league))
             id = self.session.db.execute("SELECT LAST_INSERT_ID();")
             self.id = id[0][0]
 
@@ -239,7 +310,7 @@ class warPlayer:
 
     def savePlayer(self,session,war):
         sql = """
-        INSERT INTO WarPlayer (warID,playerTag,mapPosition,townHallLevel,name,clanTag) VALUES (?,?,?,?,?,?)
+        INSERT IGNORE INTO WarPlayer (warID,playerTag,mapPosition,townHallLevel,name,clanTag) VALUES (?,?,?,?,?,?)
         """
         session.db.execute(sql,(war.id, self.playerTag,self.mapPosition,self.townHallLevel,self.name,self.clanTag,))
 
@@ -299,10 +370,12 @@ class player:
         self.playerTag = self.data['tag']
         self.clanTag = self.data['clan']['tag']
         self.name = self.data['name']
-        self.snapshot = self.getNewSnapshot()
+
         self.savePlayer()
+        self.snapshot = self.getNewSnapshot()
 
     def getNewSnapshot(self):
+        self.data = self.session.getData(f"players/{self.playerTag}")
         snap = playerSnapshot(self)
         snap.saveSnapshot(self.session.db)
         return snap
@@ -325,17 +398,17 @@ class player:
                 self.session.db.execute(sql, (self.playerTag, datetime.now()))
 
     def savePlayer(self):
-        #check is player is already saved
-        sql = """
-        SELECT playerTag FROM Player WHERE playerTag = ?;
-        """
-        names = self.session.db.execute(sql,(self.playerTag,))
-        if not names:
-            sql = """
-            INSERT INTO Player(playerTag,clanTag,name) Values(?,?,?)
-            """
-            self.session.db.execute(sql, (self.playerTag,self.clanTag,self.name))
+        sql = "SELECT playerTag FROM Player WHERE playerTag = ?;"
+        names = self.session.db.execute(sql, (self.playerTag,))
 
+        if not names:
+            # New Player: Insert them
+            sql = "INSERT INTO Player(playerTag, clanTag, name) Values(?, ?, ?)"
+            self.session.db.execute(sql, (self.playerTag, self.clanTag, self.name))
+        else:
+            # Returning Player: Update their clan tag (Fixes the NULL)
+            sql = "UPDATE Player SET clanTag = ?, name = ? WHERE playerTag = ?"
+            self.session.db.execute(sql, (self.clanTag, self.name, self.playerTag))
 
 
 class playerSnapshot:
@@ -358,7 +431,7 @@ class playerSnapshot:
 
     def saveSnapshot(self,db):
         sql = """
-        INSERT INTO PlayerSnapshot 
+        INSERT IGNORE INTO PlayerSnapshot 
         (playerTag,time,clanTag,townHallLevel,exLevel,warStars,builderHallLevel,builderBaseTrophies,role,warPreference,donations,donationsRecieved,clanCapitalContributions,league)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?);
 
