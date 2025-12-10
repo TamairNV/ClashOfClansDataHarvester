@@ -15,4 +15,4 @@ echo "--- NEW REBOOT SESSION STARTED AT $(date) ---" >> "$LOGFILE"
 
 # 6. Run Screen
 # The -u flag forces Python to print immediately.
-/usr/bin/screen -dmS Harvest bash -c "./venv/bin/python3 -u tracker.py >> $LOGFILE 2>&1"
+/usr/bin/screen -dmS Harvest bash -c "./venv/bin/python3 -u tracker.py 2>&1 | tee -a $LOGFILE"
