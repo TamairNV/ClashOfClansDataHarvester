@@ -6,7 +6,11 @@ from Fetcher import FetchSession, clan, clanWar, warResults, attack
 from TokenManager import get_valid_token # Import the helper we made in step 1
 import os
 
-clan_tags = ["#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC","#29U9COGLC",'#2LGGP2G82','#2RG22YYLL']
+clan_tags = ["#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC","#29U9COGLC",'#2LGGP2G82','#2RG22YYLL',
+             "#2YQQQOJUP","#2LJJJ9LQO","#2QUY89R2","#2Y8G98UPU","#2G2VRCRPQ","#8U98O2JO",
+             "#8RGY9RCC","#SVP9PY2U","#RVJUGOY2","#G2OGG9LJ","#G2G2JULR","#2GPLUCRLR","#JVUJR2QC"
+            ,"#2GLCOG2JR","#22GOJJR8","#2RVGUQOR2","#JCCYQPYL","#2YO9JUL9R","#CPVJYJQV",
+             "##2G28J89UQ","#8GR2GRJR","#2CC0CJVC","#2YVJU0GCU"]
 
 
 def log(message):
