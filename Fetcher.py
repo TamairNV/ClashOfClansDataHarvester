@@ -5,7 +5,6 @@ import urllib.parse
 import dotenv
 import requests
 from DBManager import DBManager
-from TokenManager import get_valid_token
 import os
 
 

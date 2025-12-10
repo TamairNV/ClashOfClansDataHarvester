@@ -1,19 +1,27 @@
 import sys
-
-from Fetcher import *
-import threading
-import time
-from datetime import datetime
-from Fetcher import FetchSession, clan, clanWar, warResults, attack
-from TokenManager import get_valid_token # Import the helper we made in step 1
 import os
+import time
+import socket
+import threading
+import asyncio
+import coc
+import dotenv
+from datetime import datetime
+
+# 1. Adjust Path to find local modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-clan_tags = ["#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC","#29U9COGLC",'#2LGGP2G82','#2RG22YYLL',
-             "#2YQQQOJUP","#2LJJJ9LQO","#2QUY89R2","#2Y8G98UPU","#2G2VRCRPQ","#8U98O2JO",
-             "#8RGY9RCC","#SVP9PY2U","#RVJUGOY2","#G2OGG9LJ","#G2G2JULR","#2GPLUCRLR","#JVUJR2QC"
-            ,"#2GLCOG2JR","#22GOJJR8","#2RVGUQOR2","#JCCYQPYL","#2YO9JUL9R","#CPVJYJQV",
-             "##2G28J89UQ","#8GR2GRJR","#2CC0CJVC","#2YVJU0GCU"]
+# 2. Local Imports
+from Fetcher import FetchSession, clan, clanWar, warResults, attack
+
+
+clan_tags = [
+    "#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC", "#29U9COGLC", '#2LGGP2G82', '#2RG22YYLL',
+    "#2YQQQOJUP", "#2LJJJ9LQO", "#2QUY89R2", "#2Y8G98UPU", "#2G2VRCRPQ", "#8U98O2JO",
+    "#8RGY9RCC", "#SVP9PY2U", "#RVJUGOY2", "#G2OGG9LJ", "#G2G2JULR", "#2GPLUCRLR", "#JVUJR2QC",
+    "#2GLCOG2JR", "#22GOJJR8", "#2RVGUQOR2", "#JCCYQPYL", "#2YO9JUL9R", "#CPVJYJQV",
+    "##2G28J89UQ", "#8GR2GRJR", "#2CC0CJVC", "#2YVJU0GCU"
+]
 
 
 def log(message):
@@ -22,12 +30,62 @@ def log(message):
     print(f"[{timestamp}] {message}")
 
 
+def check_internet_connection(host="8.8.8.8", port=53, timeout=3):
+
+    try:
+        socket.setdefaulttimeout(timeout)
+        socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
+        return True
+    except socket.error:
+        return False
+
+
+def get_valid_token():
+
+    async def fetch():
+        dotenv.load_dotenv()
+        email = os.environ.get("COC_EMAIL")
+        password = os.environ.get("COC_PASSWORD")
+
+        async with coc.Client() as client:
+
+            await client.login(email, password)
+
+            http = client.http
+            if hasattr(http, 'keys'):
+                # Return the first available key
+                return next(iter(http.keys))
+
+            raise Exception("Login successful, but no API keys found.")
+
+    return asyncio.run(fetch())
+
+
+def get_valid_token_robust():
+
+    while True:
+        try:
+            log("Attempting to acquire API Token...")
+            if not check_internet_connection():
+                log("!! No Internet Connection. Retrying in 10s...")
+                time.sleep(10)
+                continue
+
+            token = get_valid_token()
+            return token
+
+        except Exception as e:
+            log(f"!! Error acquiring token: {e}")
+            log("Retrying in 10s...")
+            time.sleep(10)
+
+
 def run_periodically(minutes, func, job_name, *args, **kwargs):
+
     def loop():
         log(f"Job '{job_name}' scheduled every {minutes} min.")
         while True:
             try:
-                # Run the passed function
                 func(*args, **kwargs)
             except Exception as e:
                 log(f"!! CRITICAL ERROR in '{job_name}': {e}")
@@ -35,34 +93,21 @@ def run_periodically(minutes, func, job_name, *args, **kwargs):
             # Wait for the next interval
             time.sleep(minutes * 60)
 
-    # Create and start the thread
     job_thread = threading.Thread(target=loop, daemon=True)
     job_thread.start()
     return job_thread
 
 
-def main():
-    log("System starting up...")
+def run_bot_logic():
 
-    # 1. GET THE TOKEN DYNAMICALLY
-    log("Authenticating with Clash of Clans Developer Portal...")
     try:
-        dotenv.load_dotenv()
-        email = os.environ.get("COC_EMAIL")
-        password = os.environ.get("COC_PASSWORD")
 
-        dynamic_token = get_valid_token(email, password)
+        dynamic_token = get_valid_token_robust()
         log("Authentication successful! Token acquired.")
-    except Exception as e:
-        log(f"CRITICAL: Could not login to developer portal: {e}")
-        return
 
-    try:
-
-        session = FetchSession(token=dynamic_token)
-
+        # 2. SETUP SESSION
         clans = []
-
+        session = FetchSession(token=dynamic_token)
 
         log(f"Initializing {len(clan_tags)} clans...")
         for c in clan_tags:
@@ -101,25 +146,42 @@ def main():
             attack.saveAttacks(session)
             log("Job Finished: Fetching New Attacks")
 
-        # --- Start Scheduler ---
-
+        # 4. START SCHEDULER
         log("Starting background schedulers...")
-
-        # I added the job name as a parameter for better error logging
         run_periodically(5, saveActivity, "Activity Check")
         run_periodically(60, savePlayerData, "Player Snapshots")
         run_periodically(30, saveWarData, "War Status")
         run_periodically(5, saveWarResults, "War Results")
         run_periodically(10, saveWarAttacks, "Attack Fetcher")
 
-        log("All systems operational. Waiting for jobs...")
+        log("All systems operational. Entering Watchdog Loop...")
 
-        # Keep the main thread alive without burning CPU
+        # 5. WATCHDOG LOOP
         while True:
-            time.sleep(1)
+            time.sleep(5)
+            # Check for internet loss
+            if not check_internet_connection():
+                log("CRITICAL: Internet Connection Lost! Restarting bot to refresh session...")
+                return False  # Trigger restart
 
     except KeyboardInterrupt:
         log("Shutting down...")
+        return True  # Exit cleanly
+    except Exception as e:
+        log(f"CRITICAL ERROR in main loop: {e}")
+        return False  # Trigger restart
+
+
+def main():
+
+    while True:
+        should_exit = run_bot_logic()
+
+        if should_exit:
+            break
+
+        log("System restarting in 5 seconds...")
+        time.sleep(5)
 
 
 if __name__ == '__main__':

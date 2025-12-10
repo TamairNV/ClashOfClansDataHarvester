@@ -4,3 +4,4 @@ mariadb
 requests
 python-dotenv
 coc.py
+requests
