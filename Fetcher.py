@@ -397,18 +397,24 @@ class player:
                 self.session.db.execute(sql, (self.playerTag, datetime.now()))
 
     def savePlayer(self):
+
+        if self.clanTag:
+            check_clan_sql = "SELECT 1 FROM Clan WHERE tag = ?"
+            if not self.session.db.execute(check_clan_sql, (self.clanTag,)):
+                self.clanTag = None  # Unlink from unknown clan
+
+
+        # Check if player is already saved
         sql = "SELECT playerTag FROM Player WHERE playerTag = ?;"
         names = self.session.db.execute(sql, (self.playerTag,))
 
         if not names:
-            # New Player: Insert them
             sql = "INSERT INTO Player(playerTag, clanTag, name) Values(?, ?, ?)"
             self.session.db.execute(sql, (self.playerTag, self.clanTag, self.name))
         else:
-            # Returning Player: Update their clan tag (Fixes the NULL)
+            # Handle returning players or name changes
             sql = "UPDATE Player SET clanTag = ?, name = ? WHERE playerTag = ?"
             self.session.db.execute(sql, (self.clanTag, self.name, self.playerTag))
-
 
 class playerSnapshot:
 
