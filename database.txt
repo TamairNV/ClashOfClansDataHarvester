@@ -1,0 +1,113 @@
+CREATE TABLE Clan (
+    tag VARCHAR(15) PRIMARY KEY,
+    name VARCHAR(50) NOT NULL,
+    level INT NOT NULL
+) ENGINE=InnoDB;
+
+-- 2. LEAGUE
+CREATE TABLE League (
+    name VARCHAR(50) PRIMARY KEY,
+    iconURL VARCHAR(255)
+) ENGINE=InnoDB;
+
+-- 3. PLAYER (Only tracks players you explicitly load)
+CREATE TABLE Player (
+    playerTag VARCHAR(15) PRIMARY KEY,
+    clanTag VARCHAR(15),
+    name VARCHAR(50) NOT NULL,
+
+    FOREIGN KEY (clanTag) REFERENCES Clan(tag) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 4. CLANWAR
+-- Note: clanTag2 (Opponent) does NOT have a Foreign Key, allowing random opponents.
+CREATE TABLE ClanWar (
+    warID INT AUTO_INCREMENT PRIMARY KEY,
+    clanTag1 VARCHAR(15) NOT NULL, -- Your Clan
+    clanTag2 VARCHAR(15) NOT NULL, -- Opponent Clan
+    state VARCHAR(20) NOT NULL,
+    teamSize INT NOT NULL,
+    startTime DATETIME NOT NULL,
+    endTime DATETIME,
+    warType VARCHAR(20) NOT NULL,
+    leagueGroupId VARCHAR(50),
+    league VARCHAR(50),
+
+    FOREIGN KEY (clanTag1) REFERENCES Clan(tag)
+) ENGINE=InnoDB;
+
+-- 5. WARRESULTS
+CREATE TABLE WarResults (
+    warID INT,
+    clanTag VARCHAR(15),
+    totalDestruction DECIMAL(5, 2) NOT NULL,
+    totalStars INT NOT NULL,
+    result VARCHAR(10) NOT NULL,
+
+    PRIMARY KEY (warID, clanTag),
+    FOREIGN KEY (warID) REFERENCES ClanWar(warID) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 6. WARPLAYER
+-- Note: Includes clanTag directly to track teams easily.
+CREATE TABLE WarPlayer (
+    warID INT,
+    playerTag VARCHAR(15),
+    mapPosition INT NOT NULL,
+    townHallLevel INT NOT NULL,
+    name VARCHAR(50) NOT NULL,
+    clanTag VARCHAR(15),
+
+    PRIMARY KEY (warID, playerTag),
+    FOREIGN KEY (warID) REFERENCES ClanWar(warID) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 7. ATTACK
+-- Note: Using Composite Key (warID + attacker + time) to prevent duplicates.
+CREATE TABLE Attack (
+    warID INT,
+    attackerTag VARCHAR(15),
+    defenderTag VARCHAR(15),
+    stars INT NOT NULL,
+    destruction DECIMAL(5, 2) NOT NULL,
+    startTime DATETIME NOT NULL,
+    duration INT NOT NULL,
+
+    PRIMARY KEY (warID, attackerTag, startTime),
+    FOREIGN KEY (warID, attackerTag) REFERENCES WarPlayer(warID, playerTag) ON DELETE CASCADE,
+    FOREIGN KEY (warID, defenderTag) REFERENCES WarPlayer(warID, playerTag) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- 8. PLAYERSNAPSHOT
+-- Tracks historical stats.
+CREATE TABLE PlayerSnapshot (
+    playerTag VARCHAR(15),
+    time DATETIME,
+    clanTag VARCHAR(15),
+    townHallLevel INT,
+    exLevel INT,
+    warStars INT,
+    builderHallLevel INT,
+    builderBaseTrophies INT,
+    role VARCHAR(20),
+    warPreference VARCHAR(10),
+    donations INT,
+    donationsRecieved INT,
+    clanCapitalContributions INT,
+    league VARCHAR(50),
+
+    PRIMARY KEY (playerTag, time),
+    FOREIGN KEY (playerTag) REFERENCES Player(playerTag) ON DELETE CASCADE,
+    FOREIGN KEY (clanTag) REFERENCES Clan(tag) ON DELETE SET NULL,
+    FOREIGN KEY (league) REFERENCES League(name) ON DELETE SET NULL
+) ENGINE=InnoDB;
+
+-- 9. ACTIVITYSNAPSHOT
+-- Minimal table for frequent checks.
+CREATE TABLE ActivitySnapshot (
+    playerTag VARCHAR(15),
+    time DATETIME,
+
+    PRIMARY KEY (playerTag, time),
+    FOREIGN KEY (playerTag) REFERENCES Player(playerTag) ON DELETE CASCADE
+) ENGINE=InnoDB;
