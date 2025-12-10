@@ -1,3 +1,5 @@
+import sys
+
 from Fetcher import *
 import threading
 import time
@@ -5,6 +7,7 @@ from datetime import datetime
 from Fetcher import FetchSession, clan, clanWar, warResults, attack
 from TokenManager import get_valid_token # Import the helper we made in step 1
 import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 clan_tags = ["#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC","#29U9COGLC",'#2LGGP2G82','#2RG22YYLL',
              "#2YQQQOJUP","#2LJJJ9LQO","#2QUY89R2","#2Y8G98UPU","#2G2VRCRPQ","#8U98O2JO",
