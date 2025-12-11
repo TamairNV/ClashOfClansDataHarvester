@@ -36,20 +36,29 @@ class FetchSession:
 
         self.db = DBManager(host, user, password_db, DB)
 
-
-    def getData(self, endpoint):
+    def getData(self, endpoint, retry=True):  # Add retry=True
         data = None
         try:
             encoded_tag = urllib.parse.quote(endpoint)
             URL = f"https://api.clashofclans.com/v1/{encoded_tag}"
             response = requests.get(URL, headers=self.headers)
 
+
+            if response.status_code == 403 and retry and self.email and self.password:
+                print(f"!! 403 Forbidden. IP changed. Refreshing Token...")
+                try:
+                    from tracker import get_valid_token  # Import here to avoid circular imports
+                    new_token = get_valid_token()
+                    self.TOKEN = new_token
+                    self.headers["Authorization"] = f"Bearer {self.TOKEN}"
+                    return self.getData(endpoint, retry=False)  # Recursive Retry
+                except Exception as e:
+                    print(f"CRITICAL: Token refresh failed: {e}")
+
             if response.status_code == 200:
                 data = response.json()
-
             else:
                 print(f"Error fetching data. Status code: {response.status_code}")
-
 
         except requests.exceptions.RequestException as e:
             print(f"An error occurred: {e}")
@@ -67,7 +76,7 @@ def fillLeagueTable(session):
     data = session.getData(f"leaguetiers")['items']
     for league in data:
         sql = """
-        INSERT INTO League (name, iconURL) VALUES (?,?)
+        INSERT IGNORE INTO League (name, iconURL) VALUES (?,?)
         """
 
         session.db.execute(sql, (league['name'], league['iconUrls']['small'],))
@@ -92,7 +101,7 @@ class clan:
         clans = self.session.db.execute(sql,(self.clanTag,))
         if not clans:
             sql = """
-            INSERT INTO Clan(tag,name,level) Values(?,?,?)
+            INSERT IGNORE INTO Clan(tag,name,level) Values(?,?,?)
             """
             self.session.db.execute(sql, (self.clanTag,self.name,self.level))
 
@@ -105,9 +114,15 @@ class clan:
     def savePlayersSnapshot(self):  # run every half hour
 
         fresh_data = self.session.getData(f"clans/{self.clanTag}")
+
+
         if fresh_data:
 
             current_member_tags = [m['tag'] for m in fresh_data.get('memberList', [])]
+
+            if len(current_member_tags) == 0:
+                print(f"!! Warning: API returned 0 members for {self.name}. Skipping cleanup to be safe.")
+                return
 
             sql_check = "SELECT playerTag FROM Player WHERE clanTag = ?"
             db_members = self.session.db.execute(sql_check, (self.clanTag,))
@@ -162,7 +177,7 @@ class clanWar: # run every 30 mins
 
             my_name = self.data['clan']['name']
             my_level = self.data['clan']['clanLevel']
-            insert_sql = "INSERT INTO Clan(tag, name, level) VALUES(?, ?, ?)"
+            insert_sql = "INSERT IGNORE INTO Clan(tag, name, level) VALUES(?, ?, ?)"
             self.session.db.execute(insert_sql, (self.clanTag1, my_name, my_level))
 
 
@@ -170,7 +185,7 @@ class clanWar: # run every 30 mins
         opp_level = self.data['opponent']['clanLevel']
         check_sql = "SELECT tag FROM Clan WHERE tag = ?"
         if not self.session.db.execute(check_sql, (self.clanTag2,)):
-            insert_sql = "INSERT INTO Clan(tag, name, level) VALUES(?, ?, ?)"
+            insert_sql = "INSERT IGNORE INTO Clan(tag, name, level) VALUES(?, ?, ?)"
             self.session.db.execute(insert_sql, (self.clanTag2, opp_name, opp_level))
 
 
@@ -209,7 +224,7 @@ class clanWar: # run every 30 mins
         wars = self.session.db.execute(sql,(self.clanTag1,self.clanTag2,))
         if not wars:
             sql = """
-            INSERT INTO ClanWar(clanTag1,clanTag2,state,teamSize,startTime,endTime,warType,leagueGroupId,league) Values(?,?,?,?,?,?,?,?,?)
+            INSERT IGNORE INTO ClanWar(clanTag1,clanTag2,state,teamSize,startTime,endTime,warType,leagueGroupId,league) Values(?,?,?,?,?,?,?,?,?)
             """
 
             self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.state, self.teamSize, fix_time(self.startTime),
@@ -344,7 +359,7 @@ class attack: # run every 10 minutes
                         if not exists:
 
                             sql = """
-                            INSERT INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
+                            INSERT IGNORE INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                             """
 
@@ -388,7 +403,7 @@ class player:
                     data[1] < self.data['donations'] or
                     data[2] < self.data['donationsReceived']):
 
-                sql = "INSERT INTO ActivitySnapshot (playerTag, time) VALUES (?, ?)"
+                sql = "INSERT IGNORE INTO ActivitySnapshot (playerTag, time) VALUES (?, ?)"
                 self.session.db.execute(sql, (self.playerTag, datetime.now()))
 
     def savePlayer(self):
