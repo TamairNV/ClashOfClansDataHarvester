@@ -7,6 +7,8 @@ import requests
 from DBManager import DBManager
 import os
 
+from tracker import get_valid_token
+
 
 class FetchSession:
 
@@ -49,8 +51,7 @@ class FetchSession:
 
                 try:
 
-                    new_token = get_valid_token(self.email, self.password)
-
+                    new_token = get_valid_token()
 
                     self.TOKEN = new_token
                     self.headers["Authorization"] = f"Bearer {self.TOKEN}"
@@ -162,8 +163,12 @@ class clanWar: # run every 30 mins
         self.data = session.getData(f"clans/{tag}/currentwar")
 
         # 1. Check State First
-        self.state = self.data.get('state')
 
+
+        if not self.data:
+            print(f"!! War Data missing for {tag} (API Error/403). Skipping.")
+            return  # Stop processing immediately
+        self.state = self.data.get('state')
         if self.state == 'notInWar':
             print("Clan is not in war.")
             return
@@ -171,6 +176,16 @@ class clanWar: # run every 30 mins
 
         self.clanTag1 = tag
         self.clanTag2 = self.data['opponent']['tag']
+
+        # If clanTag1 failed to load earlier, this saves it now so the War doesn't crash.
+        check_sql = "SELECT tag FROM Clan WHERE tag = ?"
+        if not self.session.db.execute(check_sql, (self.clanTag1,)):
+
+            my_name = self.data['clan']['name']
+            my_level = self.data['clan']['clanLevel']
+            insert_sql = "INSERT INTO Clan(tag, name, level) VALUES(?, ?, ?)"
+            self.session.db.execute(insert_sql, (self.clanTag1, my_name, my_level))
+
 
         opp_name = self.data['opponent']['name']
         opp_level = self.data['opponent']['clanLevel']
@@ -272,7 +287,7 @@ class warResults: # run every 5 minutes
                         destruction[1] /= numOfAttacks[1]
 
                     sql = """
-                            INSERT INTO WarResults (warID, clanTag, totalDestruction, totalStars, result)
+                            INSERT  IGNORE INTO WarResults (warID, clanTag, totalDestruction, totalStars, result)
                             VALUES (?, ?, ?, ?, ?)
                             """
                     states = [None,None]
@@ -336,7 +351,7 @@ class attack: # run every 10 minutes
                         if not exists:
 
                             sql = """
-                                INSERT INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
+                                INSERT IGNORE INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
                                 VALUES (?, ?, ?, ?, ?, ?, ?)
                                 """
 
@@ -371,10 +386,11 @@ class player:
         self.name = self.data['name']
 
         self.savePlayer()
-        self.snapshot = self.getNewSnapshot()
+        self.snapshot = self.getNewSnapshot(getData = False)
 
-    def getNewSnapshot(self):
-        self.data = self.session.getData(f"players/{self.playerTag}")
+    def getNewSnapshot(self,getData = True):
+        if getData:
+            self.data = self.session.getData(f"players/{self.playerTag}")
         snap = playerSnapshot(self)
         snap.saveSnapshot(self.session.db)
         return snap
@@ -409,7 +425,7 @@ class player:
         names = self.session.db.execute(sql, (self.playerTag,))
 
         if not names:
-            sql = "INSERT INTO Player(playerTag, clanTag, name) Values(?, ?, ?)"
+            sql = "INSERT IGNORE INTO Player(playerTag, clanTag, name) Values(?, ?, ?)"
             self.session.db.execute(sql, (self.playerTag, self.clanTag, self.name))
         else:
             # Handle returning players or name changes
