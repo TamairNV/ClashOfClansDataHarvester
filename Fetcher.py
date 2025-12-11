@@ -419,21 +419,31 @@ class player:
 class playerSnapshot:
 
     def __init__(self,player):
-        self.clanTag =player.clanTag
-        self.playerTag =player.playerTag
-        self.townHallLevel = player.data['townHallLevel']
-        self.exLevel = player.data['expLevel']
-        self.warStars = player.data['warStars']
-        self.builderHallLevel = player.data['builderHallLevel']
-        self.builderBaseTrophies = player.data['builderBaseTrophies']
-        self.role =player.data['role']
-        self.warPreference = player.data['warPreference']
-        self.donations = player.data['donations']
-        self.donationsReceived = player.data['donationsReceived']
-        self.league = player.data['leagueTier']['name']
-        self.clanCapitalContributions = player.data['clanCapitalContributions']
-        self.time = datetime.now()
+        self.clanTag = player.clanTag
+        self.playerTag = player.playerTag
 
+
+        self.townHallLevel = player.data.get('townHallLevel', 1)
+        self.exLevel = player.data.get('expLevel', 1)
+        self.warStars = player.data.get('warStars', 0)
+
+
+        self.builderHallLevel = player.data.get('builderHallLevel', 0)
+        self.builderBaseTrophies = player.data.get('builderBaseTrophies', 0)
+
+        self.role = player.data.get('role', 'member')
+        self.warPreference = player.data.get('warPreference', 'out')
+        self.donations = player.data.get('donations', 0)
+        self.donationsReceived = player.data.get('donationsReceived', 0)
+        self.clanCapitalContributions = player.data.get('clanCapitalContributions', 0)
+
+
+        if 'league' in player.data and player.data['league']:
+            self.league = player.data['league']['name']
+        else:
+            self.league = 'Unranked'
+
+        self.time = datetime.now()
     def saveSnapshot(self,db):
         sql = """
         INSERT IGNORE INTO PlayerSnapshot 
