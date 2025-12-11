@@ -7,7 +7,6 @@ import requests
 from DBManager import DBManager
 import os
 
-from tracker import get_valid_token
 
 
 class FetchSession:
@@ -38,32 +37,12 @@ class FetchSession:
         self.db = DBManager(host, user, password_db, DB)
 
 
-    def getData(self, endpoint, retry=True):
+    def getData(self, endpoint):
         data = None
         try:
             encoded_tag = urllib.parse.quote(endpoint)
             URL = f"https://api.clashofclans.com/v1/{encoded_tag}"
             response = requests.get(URL, headers=self.headers)
-
-
-            if response.status_code == 403 and retry and self.email and self.password:
-                print(f"!! 403 Forbidden detected for {endpoint}. IP likely changed. Refreshing Token...")
-
-                try:
-
-                    new_token = get_valid_token()
-
-                    self.TOKEN = new_token
-                    self.headers["Authorization"] = f"Bearer {self.TOKEN}"
-                    print("Token refreshed successfully! Retrying request...")
-
-
-                    return self.getData(endpoint, retry=False)
-
-                except Exception as e:
-                    print(f"CRITICAL: Failed to refresh token: {e}")
-                    return None
-
 
             if response.status_code == 200:
                 data = response.json()
