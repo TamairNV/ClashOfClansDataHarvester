@@ -16,13 +16,13 @@ from Fetcher import FetchSession, clan, clanWar, warResults, attack
 
 
 clan_tags = [
-    "#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC", "#29U9COGLC", '#2LGGP2G82', '#2RG22YYLL',
-    "#2YQQQOJUP", "#2LJJJ9LQO", "#2QUY89R2", "#2Y8G98UPU", "#2G2VRCRPQ", "#8U98O2JO",
-    "#8RGY9RCC", "#RVJUGOY2", "#G2OGG9LJ", "#G2G2JULR", "#2GPLUCRLR", "#JVUJR2QC",
-    "#2GLCOG2JR", "#22GOJJR8", "#2RVGUQOR2", "#JCCYQPYL", "#2YO9JUL9R", "#CPVJYJQV",
+    "#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC", "#29U9C0GLC", '#2LGGP2G82', '#2RG22YYLL',
+    "#2YQQQ0JUP", "#2LJJJ9LQ0", "#2QUY89R2", "#2Y8G98UPU", "#2G2VRCRPQ", "#8U9802J0",
+    "#8RGY9RCC", "#RVJUG0Y2", "#G20GG9LJ", "#G2G2JULR", "#2GPLUCRLR", "#JVUJR2QC",
+    "#2GLC0G2JR", "#22G0JJR8", "#2RVGUQ0R2", "#JCCYQPYL", "#2Y09JUL9R", "#CPVJYJQV",
     "#2G28J89UQ", "#8GR2GRJR", "#2CC0CJVC", "#2YVJU0GCU"
 ]
-
+#29U9C0GLC
 
 def log(message):
     """Helper to print messages with a nice timestamp."""
