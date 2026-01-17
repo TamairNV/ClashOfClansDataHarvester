@@ -39,8 +39,9 @@ class FetchSession:
     def getData(self, endpoint, retry=True):  # Add retry=True
         data = None
         try:
-            encoded_tag = urllib.parse.quote(endpoint)
-            URL = f"https://api.clashofclans.com/v1/{encoded_tag}"
+
+            URL = f"https://api.clashofclans.com/v1/{endpoint}"
+
             response = requests.get(URL, headers=self.headers)
 
 
@@ -218,10 +219,14 @@ class clanWar: # run every 30 mins
                 return None
 
         sql = """
-        SELECT warID FROM ClanWar WHERE (clanTag1 = ? AND clanTag2 = ?) AND state IN ('preparation', 'inWar');
-        """
+                SELECT warID FROM ClanWar 
+                WHERE ((clanTag1 = ? AND clanTag2 = ?) OR (clanTag1 = ? AND clanTag2 = ?))
+                AND state IN ('preparation', 'inWar');
+                """
 
-        wars = self.session.db.execute(sql,(self.clanTag1,self.clanTag2,))
+        # Pass the tags twice to cover both (A, B) and (B, A) cases
+        wars = self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.clanTag2, self.clanTag1))
+
         if not wars:
             sql = """
             INSERT IGNORE INTO ClanWar(clanTag1,clanTag2,state,teamSize,startTime,endTime,warType,leagueGroupId,league) Values(?,?,?,?,?,?,?,?,?)
@@ -323,51 +328,82 @@ class warPlayer:
         session.db.execute(sql,(war.id, self.playerTag,self.mapPosition,self.townHallLevel,self.name,self.clanTag,))
 
 
-class attack: # run every 10 minutes
+class attack:  # run every 10 minutes
 
     @staticmethod
     def saveAttacks(session):
-        sql = """
-        SELECT warID,clanTag1,clanTag2 FROM ClanWar WHERE state = "inWar" OR state = "warEnded";
-        """
-        wars = session.db.execute(sql)
 
-        if wars:
-            for war in wars:
-                data = session.getData(f"clans/{war[1]}/currentwar")
+        clans = session.db.execute("SELECT tag FROM Clan;")
 
-                for m in data['opponent']['members']:
-                    for attack in m.get('attacks', []):
+        if not clans:
+            return
+
+        for clan_row in clans:
+            clan_tag = clan_row[0]
+
+
+            data = session.getData(f"clans/{clan_tag}/currentwar")
+
+            if not data or data.get('state') not in ['inWar', 'warEnded']:
+                continue
+
+
+            opponent_tag = data['opponent']['tag']
+            start_time_str = data['startTime']
+
+            try:
+                war_start_dt = datetime.strptime(start_time_str, "%Y%m%dT%H%M%S.%fZ")
+            except ValueError:
+                continue  # Skip if time format is weird
+
+
+            sql_find_war = """
+            SELECT warID FROM ClanWar 
+            WHERE clanTag1 = ? AND clanTag2 = ? AND startTime = ?
+            """
+
+            war_id_row = session.db.execute(sql_find_war, (clan_tag, opponent_tag, war_start_dt))
+
+            if not war_id_row:
+
+                war_id_row = session.db.execute(sql_find_war, (opponent_tag, clan_tag, war_start_dt))
+
+            if not war_id_row:
+
+                continue
+
+            current_war_id = war_id_row[0][0]
+
+
+            def process_member_attacks(members):
+                for m in members:
+                    for atk in m.get('attacks', []):
+                        attacker_tag = atk['attackerTag']
+                        defender_tag = atk['defenderTag']
+
 
                         check_sql = "SELECT 1 FROM Attack WHERE warID=? AND attackerTag=? AND defenderTag=?"
-                        exists = session.db.execute(check_sql, (war[0], attack['attackerTag'], attack['defenderTag']))
+                        exists = session.db.execute(check_sql, (current_war_id, attacker_tag, defender_tag))
 
                         if not exists:
 
-                            sql = """
-                                INSERT IGNORE INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                                """
-
-                            session.db.execute(sql, (war[0],attack['attackerTag'],attack['defenderTag'],attack['stars'],attack['destructionPercentage'],datetime.now(),attack['duration']
-                            ))
-                for m in data['clan']['members']:
-                    for attack in m.get('attacks', []):
-                        check_sql = "SELECT 1 FROM Attack WHERE warID=? AND attackerTag=? AND defenderTag=?"
-                        exists = session.db.execute(check_sql, (war[0], attack['attackerTag'], attack['defenderTag']))
-
-                        if not exists:
-
-                            sql = """
+                            insert_sql = """
                             INSERT IGNORE INTO Attack (warID, attackerTag, defenderTag, stars, destruction, startTime, duration)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                             """
-
-                            session.db.execute(sql, (war[0],attack['attackerTag'],attack['defenderTag'],attack['stars'],attack['destructionPercentage'],datetime.now(),attack['duration']
+                            session.db.execute(insert_sql, (
+                                current_war_id,
+                                attacker_tag,
+                                defender_tag,
+                                atk['stars'],
+                                atk['destructionPercentage'],
+                                datetime.now(),
+                                atk['duration']
                             ))
 
 
-
+            process_member_attacks(data.get('clan', {}).get('members', []))
+            process_member_attacks(data.get('opponent', {}).get('members', []))
 
 
 class player:

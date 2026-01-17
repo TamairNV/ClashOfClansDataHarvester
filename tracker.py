@@ -4,17 +4,14 @@ import time
 import socket
 import threading
 import asyncio
-import coc
 import dotenv
 from datetime import datetime
 
-# 1. Adjust Path to find local modules
+# Path setup
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-# 2. Local Imports
 from Fetcher import FetchSession, clan, clanWar, warResults, attack
 
-
+# --- CONFIG ---
 clan_tags = [
     "#9PGQPGL", "#8GGPQLPU", "#22RUUC2JC", "#29U9C0GLC", '#2LGGP2G82', '#2RG22YYLL',
     "#2YQQQ0JUP", "#2LJJJ9LQ0", "#2QUY89R2", "#2Y8G98UPU", "#2G2VRCRPQ", "#8U9802J0",
@@ -22,16 +19,14 @@ clan_tags = [
     "#2GLC0G2JR", "#22G0JJR8", "#2RVGUQ0R2", "#JCCYQPYL", "#2Y09JUL9R", "#CPVJYJQV",
     "#2G28J89UQ", "#8GR2GRJR", "#2CC0CJVC", "#2YVJU0GCU"
 ]
-#29U9C0GLC
+internet_event = threading.Event()
+
 
 def log(message):
-    """Helper to print messages with a nice timestamp."""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}")
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
 
 
 def check_internet_connection(host="8.8.8.8", port=53, timeout=3):
-
     try:
         socket.setdefaulttimeout(timeout)
         socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect((host, port))
@@ -41,147 +36,110 @@ def check_internet_connection(host="8.8.8.8", port=53, timeout=3):
 
 
 def get_valid_token():
-
+    # Helper for asyncio loop
     async def fetch():
         dotenv.load_dotenv()
         email = os.environ.get("COC_EMAIL")
         password = os.environ.get("COC_PASSWORD")
-
+        import coc
         async with coc.Client() as client:
-
             await client.login(email, password)
-
             http = client.http
             if hasattr(http, 'keys'):
-                # Return the first available key
                 return next(iter(http.keys))
-
-            raise Exception("Login successful, but no API keys found.")
+            raise Exception("No API keys found.")
 
     return asyncio.run(fetch())
 
 
-def get_valid_token_robust():
+def run_job_safe(interval_minutes, func, job_name):
+
+    log(f"Thread '{job_name}' initialized.")
 
     while True:
-        try:
-            log("Attempting to acquire API Token...")
-            if not check_internet_connection():
-                log("!! No Internet Connection. Retrying in 10s...")
-                time.sleep(10)
-                continue
 
-            token = get_valid_token()
-            return token
+        internet_event.wait()
+
+        try:
+            # 2. Execute the job
+            func()
 
         except Exception as e:
-            log(f"!! Error acquiring token: {e}")
-            log("Retrying in 10s...")
-            time.sleep(10)
+            log(f"!! Error in '{job_name}': {e}")
+            # We don't exit. We just log and sleep.
 
-
-def run_periodically(minutes, func, job_name, *args, **kwargs):
-
-    def loop():
-        log(f"Job '{job_name}' scheduled every {minutes} min.")
-        while True:
-            try:
-                func(*args, **kwargs)
-            except Exception as e:
-                log(f"!! CRITICAL ERROR in '{job_name}': {e}")
-
-            # Wait for the next interval
-            time.sleep(minutes * 60)
-
-    job_thread = threading.Thread(target=loop, daemon=True)
-    job_thread.start()
-    return job_thread
-
-
-def run_bot_logic():
-
-    try:
-
-        dynamic_token = get_valid_token_robust()
-        log("Authentication successful! Token acquired.")
-
-        # 2. SETUP SESSION
-        clans = []
-        session = FetchSession(token=dynamic_token)
-
-        log(f"Initializing {len(clan_tags)} clans...")
-        for c in clan_tags:
-            try:
-                new_clan = clan(c, session)
-                clans.append(new_clan)
-                log(f"-> Loaded clan: {new_clan.name} ({new_clan.clanTag})")
-            except Exception as e:
-                log(f"!! Failed to load clan {c}: {e}")
-
-        def saveActivity():
-            log("Job Started: Activity Check")
-            for c in clans:
-                c.savePlayersActivity()
-            log("Job Finished: Activity Check")
-
-        def savePlayerData():
-            log("Job Started: Player Snapshots")
-            for c in clans:
-                c.savePlayersSnapshot()
-            log("Job Finished: Player Snapshots")
-
-        def saveWarData():
-            log("Job Started: War Status Update")
-            for t in clan_tags:
-                clanWar(session, t)
-            log("Job Finished: War Status Update")
-
-        def saveWarResults():
-            log("Job Started: War Results Check")
-            warResults.checkWarEnded(session)
-            log("Job Finished: War Results Check")
-
-        def saveWarAttacks():
-            log("Job Started: Fetching New Attacks")
-            attack.saveAttacks(session)
-            log("Job Finished: Fetching New Attacks")
-
-        # 4. START SCHEDULER
-        log("Starting background schedulers...")
-        run_periodically(5, saveActivity, "Activity Check")
-        run_periodically(60, savePlayerData, "Player Snapshots")
-        run_periodically(30, saveWarData, "War Status")
-        run_periodically(5, saveWarResults, "War Results")
-        run_periodically(10, saveWarAttacks, "Attack Fetcher")
-
-        log("All systems operational. Entering Watchdog Loop...")
-
-        # 5. WATCHDOG LOOP
-        while True:
-            time.sleep(5)
-            # Check for internet loss
-            if not check_internet_connection():
-                log("CRITICAL: Internet Connection Lost! Restarting bot to refresh session...")
-                return False  # Trigger restart
-
-    except KeyboardInterrupt:
-        log("Shutting down...")
-        return True  # Exit cleanly
-    except Exception as e:
-        log(f"CRITICAL ERROR in main loop: {e}")
-        return False  # Trigger restart
+        # 3. Sleep for the interval
+        time.sleep(interval_minutes * 60)
 
 
 def main():
+    log("=== CLASH HARVESTER STARTED (Pure Python Mode) ===")
 
+    # 1. Initial Internet Wait
+    while not check_internet_connection():
+        log("Waiting for internet to start...")
+        time.sleep(10)
+
+    internet_event.set()  # Green light!
+
+    # 2. Initialize Session
+    try:
+        token = get_valid_token()
+        session = FetchSession(token=token)
+    except Exception as e:
+        log(f"CRITICAL: Failed to get initial token: {e}")
+        # In a real infinite script, we might want to loop here too,
+        # but if we can't login at boot, something is wrong with config.
+        sys.exit(1)
+
+    # 3. Initialize Clans
+    clans = []
+    log(f"Loading {len(clan_tags)} clans...")
+    for tag in clan_tags:
+        try:
+            clans.append(clan(tag, session))
+        except Exception as e:
+            log(f"Skipping clan {tag}: {e}")
+
+    # 4. Define Job Wrappers
+    def job_activity():
+        for c in clans: c.savePlayersActivity()
+
+    def job_snapshot():
+        for c in clans: c.savePlayersSnapshot()
+
+    def job_war_status():
+        for t in clan_tags: clanWar(session, t)
+
+    def job_war_results():
+        warResults.checkWarEnded(session)
+
+    def job_attacks():
+        attack.saveAttacks(session)
+
+    # 5. Launch Threads (Daemon=True ensures they die if main script is killed)
+    threading.Thread(target=run_job_safe, args=(5, job_activity, "Activity"), daemon=True).start()
+    threading.Thread(target=run_job_safe, args=(60, job_snapshot, "Snapshot"), daemon=True).start()
+    threading.Thread(target=run_job_safe, args=(30, job_war_status, "WarStatus"), daemon=True).start()
+    threading.Thread(target=run_job_safe, args=(5, job_war_results, "WarResults"), daemon=True).start()
+    threading.Thread(target=run_job_safe, args=(10, job_attacks, "Attacks"), daemon=True).start()
+
+    log("All systems GO. Monitoring connection...")
+
+    # 6. Infinite Watchdog Loop
     while True:
-        should_exit = run_bot_logic()
+        time.sleep(10)
 
-        if should_exit:
-            break
+        is_connected = check_internet_connection()
 
-        log("System restarting in 5 seconds...")
-        time.sleep(5)
+        if is_connected and not internet_event.is_set():
+            log("Internet RESTORED. Resuming threads.")
+            internet_event.set()  # Wake up all threads
+
+
+        elif not is_connected and internet_event.is_set():
+            log("!! Internet LOST. Pausing threads.")
+            internet_event.clear()  # Freeze all threads
 
 
 if __name__ == '__main__':
