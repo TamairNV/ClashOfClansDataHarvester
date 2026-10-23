@@ -218,24 +218,26 @@ class clanWar: # run every 30 mins
             except ValueError:
                 return None
 
+        # Match on start time whatever the state. Only matching prep/inWar meant every
+        # poll after a war ended inserted another copy of it.
         sql = """
                 SELECT warID FROM ClanWar 
                 WHERE ((clanTag1 = ? AND clanTag2 = ?) OR (clanTag1 = ? AND clanTag2 = ?))
-                AND state IN ('preparation', 'inWar');
+                AND startTime = ?;
                 """
 
         # Pass the tags twice to cover both (A, B) and (B, A) cases
-        wars = self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.clanTag2, self.clanTag1))
+        start = fix_time(self.startTime)
+        wars = self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.clanTag2, self.clanTag1, start))
 
         if not wars:
             sql = """
             INSERT IGNORE INTO ClanWar(clanTag1,clanTag2,state,teamSize,startTime,endTime,warType,leagueGroupId,league) Values(?,?,?,?,?,?,?,?,?)
             """
 
-            self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.state, self.teamSize, fix_time(self.startTime),
+            # execute() returns the new row id; a separate LAST_INSERT_ID query could race other threads
+            self.id = self.session.db.execute(sql, (self.clanTag1, self.clanTag2, self.state, self.teamSize, fix_time(self.startTime),
                                           fix_time(self.endTime), self.warType, self.leagueGroupID, self.league))
-            id = self.session.db.execute("SELECT LAST_INSERT_ID();")
-            self.id = id[0][0]
 
         else:
             self.id = wars[0][0]
