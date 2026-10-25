@@ -1,5 +1,5 @@
 # Fetcher.py
-from datetime import datetime
+from datetime import datetime, timedelta
 from os import environ
 import urllib.parse
 import dotenv
@@ -109,7 +109,10 @@ class clan:
     def saveClanMemberData(self):
         self.players = []
         for m in self.data['memberList']:
-            self.players.append(player(m['tag'],self.session))
+            try:
+                self.players.append(player(m['tag'], self.session))
+            except Exception as e:
+                print(f"!! Could not load player {m['tag']}: {e}")
 
     def savePlayersSnapshot(self):  # run every half hour
 
@@ -137,12 +140,20 @@ class clan:
                     self.session.db.execute(update_sql, (db_tag,))
 
 
-            self.players = []
-
-            for m in fresh_data.get('memberList', []):
-                p_obj = player(m['tag'], self.session)
-                self.players.append(p_obj)
-                p_obj.snapshot = p_obj.getNewSnapshot()
+            # Members we already track are refreshed every few minutes by activityCheck,
+            # so only players who just joined need fetching here.
+            known = {p.playerTag: p for p in self.players}
+            players = []
+            for tag in current_member_tags:
+                p_obj = known.get(tag)
+                if p_obj is None:
+                    try:
+                        p_obj = player(tag, self.session)
+                    except Exception as e:
+                        print(f"!! Could not load player {tag}: {e}")
+                        continue
+                players.append(p_obj)
+            self.players = players
 
 
     def savePlayersActivity(self): # run every 10 mins
@@ -256,31 +267,27 @@ class warResults: # run every 5 minutes
                 exists = session.db.execute(check_sql, (war[0],))
 
                 if not exists:
+                    # War score = best hit on each enemy base (stars and destruction),
+                    # not the sum of every attack.
                     sql = """
-                    SELECT a.stars, a.destruction, p.clanTag 
+                    SELECT p.clanTag, a.defenderTag, MAX(a.stars), MAX(a.destruction)
                     FROM Attack a
                     JOIN WarPlayer p ON a.attackerTag = p.playerTag AND a.warID = p.warID
                     WHERE a.warID = ?
+                    GROUP BY p.clanTag, a.defenderTag
                     """
-                    attacks = session.db.execute(sql,(war[0],))
-                    stars = [0,0]
-                    destruction = [0,0]
-                    numOfAttacks = [0,0]
-
-                    for attack in attacks:
-                        if attack[2] == war[1]:
-                            stars[0] += attack[0]
-                            destruction[0] += attack[1]
-                            numOfAttacks[0] +=1
-                        else:
-                            stars[1] += attack[0]
-                            destruction[1] += attack[1]
-                            numOfAttacks[1] +=1
-
-                    if numOfAttacks[0] > 0:
-                        destruction[0] /= numOfAttacks[0]
-                    if numOfAttacks[1] > 0:
-                        destruction[1] /= numOfAttacks[1]
+                    bases = session.db.execute(sql, (war[0],))
+                    if not bases:
+                        continue  # attacks not saved yet; try again next run
+                    size = session.db.execute("SELECT teamSize FROM ClanWar WHERE warID = ?", (war[0],))
+                    team_size = (size[0][0] if size else 0) or 1
+                    stars = [0, 0]
+                    destruction = [0, 0]
+                    for clan_tag, _, best_stars, best_dest in bases:
+                        side = 0 if clan_tag == war[1] else 1
+                        stars[side] += best_stars
+                        destruction[side] += float(best_dest)
+                    destruction = [round(d / team_size, 2) for d in destruction]
 
                     sql = """
                             INSERT  IGNORE INTO WarResults (warID, clanTag, totalDestruction, totalStars, result)
@@ -383,41 +390,72 @@ class attack: # run every 10 minutes
 
 
 
+# Counters that only go up when the player does something themselves.
+ACTIVITY_COUNTERS = ('donations', 'attackWins', 'warStars', 'clanCapitalContributions', 'expLevel')
+
+# A snapshot is written when anything changes, and at least this often otherwise,
+# so a quiet player still shows up as present in the clan.
+SNAPSHOT_HEARTBEAT = timedelta(hours=24)
+
+
 class player:
 
     def __init__(self,tag,session):
         self.session = session
         self.data = session.getData(f"players/{tag}")
+        if not self.data:
+            raise ValueError("no data from API")
         self.playerTag = self.data['tag']
-        self.clanTag = self.data['clan']['tag']
+        self.clanTag = (self.data.get('clan') or {}).get('tag')
         self.name = self.data['name']
+        self.lastSnapshot = None
+        self.lastSnapshotTime = None
 
         self.savePlayer()
-        self.snapshot = self.getNewSnapshot(getData = False)
+        self.snapshot = self.saveSnapshotIfChanged()
 
-    def getNewSnapshot(self,getData = True):
-        if getData:
-            self.data = self.session.getData(f"players/{self.playerTag}")
+    def saveSnapshotIfChanged(self):
         snap = playerSnapshot(self)
-        snap.saveSnapshot(self.session.db)
+        if self.lastSnapshot is None:
+            self.loadLastSnapshot()
+        due = self.lastSnapshotTime is None or snap.time - self.lastSnapshotTime >= SNAPSHOT_HEARTBEAT
+        if due or snap.values() != self.lastSnapshot:
+            snap.saveSnapshot(self.session.db)
+            self.lastSnapshot = snap.values()
+            self.lastSnapshotTime = snap.time
         return snap
 
-    def activityCheck(self):
-        self.data = self.session.getData(f"players/{self.playerTag}")
-
+    def loadLastSnapshot(self):
         sql = """
-        SELECT builderBaseTrophies, donations, donationsRecieved FROM PlayerSnapshot WHERE playerTag = ? ORDER BY time DESC LIMIT 1;
+        SELECT clanTag, townHallLevel, exLevel, warStars, builderHallLevel, builderBaseTrophies, role,
+               warPreference, donations, donationsRecieved, clanCapitalContributions, league, time
+        FROM PlayerSnapshot WHERE playerTag = ? ORDER BY time DESC LIMIT 1;
         """
-        result = self.session.db.execute(sql,(self.playerTag,))
-        if result:
-            data = result[0]
+        rows = self.session.db.execute(sql, (self.playerTag,))
+        if rows:
+            self.lastSnapshot = tuple(rows[0][:-1])
+            self.lastSnapshotTime = rows[0][-1]
 
-            if (data[0] != self.data['builderBaseTrophies'] or
-                    data[1] < self.data['donations'] or
-                    data[2] < self.data['donationsReceived']):
+    def activityCheck(self):
+        fresh = self.session.getData(f"players/{self.playerTag}")
+        if not fresh:
+            return
+        previous, self.data = self.data, fresh
 
-                sql = "INSERT IGNORE INTO ActivitySnapshot (playerTag, time) VALUES (?, ?)"
-                self.session.db.execute(sql, (self.playerTag, datetime.now()))
+        # Compare with the previous poll (not the last snapshot), so one donation is
+        # logged once rather than on every check until the next snapshot.
+        active = fresh.get('builderBaseTrophies') != previous.get('builderBaseTrophies') or any(
+            (fresh.get(k) or 0) > (previous.get(k) or 0) for k in ACTIVITY_COUNTERS)
+        if active:
+            sql = "INSERT IGNORE INTO ActivitySnapshot (playerTag, time) VALUES (?, ?)"
+            self.session.db.execute(sql, (self.playerTag, datetime.now()))
+
+        clan_tag = (fresh.get('clan') or {}).get('tag')
+        if clan_tag != self.clanTag or fresh['name'] != self.name:
+            self.clanTag, self.name = clan_tag, fresh['name']
+            self.savePlayer()
+
+        self.snapshot = self.saveSnapshotIfChanged()
 
     def savePlayer(self):
 
@@ -467,6 +505,13 @@ class playerSnapshot:
             self.league = 'Unranked'
 
         self.time = datetime.now()
+
+    def values(self):
+        """Everything except the timestamp, in PlayerSnapshot column order."""
+        return (self.clanTag, self.townHallLevel, self.exLevel, self.warStars, self.builderHallLevel,
+                self.builderBaseTrophies, self.role, self.warPreference, self.donations,
+                self.donationsReceived, self.clanCapitalContributions, self.league)
+
     def saveSnapshot(self,db):
         sql = """
         INSERT IGNORE INTO PlayerSnapshot 
